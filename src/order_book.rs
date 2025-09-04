@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 use crate::{
     order::Order,
     order_modify::OrderModify,
-    trade::{Trade, TradeInfo},
-    types::{LevelInfo, OrderId, OrderIds, OrderType, Price, Quantity, Side},
+    trade::{Trade, Trades,  TradeInfo},
+    types::{LevelInfo, OrderId, OrderIds, OrderType, Price, Quantity, Side, OrderStatus, OrderResult},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -163,7 +163,7 @@ impl OrderBook {
         false
     }
 
-    fn match_orders(&mut self) -> Vec<Trade> {
+    fn match_orders(&mut self) -> Trades {
         let mut trades = Vec::new();
 
         loop {
@@ -289,7 +289,7 @@ impl OrderBook {
         trades
     }
 
-    pub fn add_order(&mut self, side: Side, order_type: OrderType, price: Price, quantity: Quantity) -> (OrderId, Vec<Trade>) {
+    pub fn add_order(&mut self, side: Side, order_type: OrderType, price: Price, quantity: Quantity) -> (OrderId, Trades) {
         let order_id = self.next_order_id;
         self.next_order_id += 1;
 
@@ -344,6 +344,68 @@ impl OrderBook {
         (order_id, trades)
     }
 
+    pub fn add_order_with_status(&mut self, side: Side, order_type: OrderType, price: Price, quantity: Quantity) -> OrderResult {
+        let order_id = self.next_order_id;
+        self.next_order_id += 1;
+
+        let mut order = Order::new(order_id, side, order_type, price, quantity);
+
+        if self.orders.contains_key(&order_id) {
+            return OrderResult::new(order_id, OrderStatus::RejectedDuplicateId, Vec::new());
+        }
+
+        if order_type == OrderType::Market {
+            match side {
+                Side::Buy => {
+                    if !self.asks.is_empty() {
+                        let worst_ask = *self.asks.keys().next_back().unwrap();
+                        order.to_good_till_cancel(worst_ask);
+                    } else {
+                        return OrderResult::new(order_id, OrderStatus::RejectedNoLiquidity, Vec::new());
+                    }
+                }
+                Side::Sell => {
+                    if !self.bids.is_empty() {
+                        let worst_bid = *self.bids.keys().next().unwrap();
+                        order.to_good_till_cancel(worst_bid);
+                    } else {
+                        return OrderResult::new(order_id, OrderStatus::RejectedNoLiquidity, Vec::new());
+                    }
+                }
+            }
+        }
+
+        if order_type == OrderType::FillAndKill && !self.can_match(side, order.get_price()) {
+            return OrderResult::new(order_id, OrderStatus::RejectedFillAndKillNoMatch, Vec::new());
+        }
+
+        if order_type == OrderType::FillOrKill && !self.can_fully_fill(side, order.get_price(), order.get_initial_quantity()) {
+            return OrderResult::new(order_id, OrderStatus::RejectedFillOrKillPartialFill, Vec::new());
+        }
+
+        match side {
+            Side::Buy => {
+                self.bids.entry(order.get_price()).or_insert_with(Vec::new).push(order.clone());
+            }
+            Side::Sell => {
+                self.asks.entry(order.get_price()).or_insert_with(Vec::new).push(order.clone());
+            }
+        }
+
+        self.orders.insert(order_id, order.clone());
+        self.on_order_added(&order);
+
+        let trades = self.match_orders();
+
+        let status = if trades.is_empty() {
+            OrderStatus::Accepted
+        } else {
+            OrderStatus::Executed
+        };
+
+        OrderResult::new(order_id, status, trades)
+    }
+
     pub fn cancel_orders(&mut self, order_ids: OrderIds) {
         for order_id in order_ids {
             self.cancel_order_internal(order_id);
@@ -382,7 +444,7 @@ impl OrderBook {
         self.cancel_order_internal(order_id);
     }
 
-    pub fn modify_order(&mut self, order_modify: OrderModify) -> Vec<Trade> {
+    pub fn modify_order(&mut self, order_modify: OrderModify) -> Trades {
         let order_type = {
             if let Some(existing_order) = self.orders.get(&order_modify.get_order_id()) {
                 existing_order.get_order_type()

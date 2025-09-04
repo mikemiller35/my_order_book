@@ -5,9 +5,7 @@ edition = "2024"
 authors = ["Mike Miller <mike.miller@mikemiller.tech>"]
 description = "A order book implementation for trading systems"
 license = "MIT"
-repository = "https://github.com/yourusername/my_order_book"
-keywords = ["trading", "orderbook", "finance", "matching-engine"]
-categories = ["algorithms", "data-structures"]
+repository = "https://github.com/mikemiller35/my_order_book"
 
 [lib]
 name = "my_order_book"

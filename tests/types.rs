@@ -1,4 +1,4 @@
-use my_order_book::{Side, OrderType, LevelInfo};
+use my_order_book::{Side, OrderType, LevelInfo, OrderStatus, OrderResult, Trade, TradeInfo};
 
 #[test]
 fn test_side_enum_values() {
@@ -243,4 +243,97 @@ fn test_order_type_pattern_matching() {
     assert!(is_immediate_order(OrderType::FillAndKill));
     assert!(!is_immediate_order(OrderType::Limit));
     assert!(!is_immediate_order(OrderType::GoodTillCancel));
+}
+
+#[test]
+fn test_order_status_enum_values() {
+    let accepted = OrderStatus::Accepted;
+    let executed = OrderStatus::Executed;
+    let rejected_no_liquidity = OrderStatus::RejectedNoLiquidity;
+    let rejected_fak = OrderStatus::RejectedFillAndKillNoMatch;
+    let rejected_fok = OrderStatus::RejectedFillOrKillPartialFill;
+    let rejected_dup = OrderStatus::RejectedDuplicateId;
+
+    // Test that they're different
+    assert_ne!(accepted, executed);
+    assert_ne!(executed, rejected_no_liquidity);
+    assert_ne!(rejected_fak, rejected_fok);
+    assert_ne!(rejected_fok, rejected_dup);
+}
+
+#[test]
+fn test_order_status_messages() {
+    assert_eq!(OrderStatus::Accepted.message(), "Order accepted and placed in order book");
+    assert_eq!(OrderStatus::Executed.message(), "Order executed successfully");
+    assert_eq!(OrderStatus::RejectedNoLiquidity.message(), "Market order rejected: no liquidity available on opposite side");
+    assert_eq!(OrderStatus::RejectedFillAndKillNoMatch.message(), "Fill-and-Kill order rejected: no matching orders available");
+    assert_eq!(OrderStatus::RejectedFillOrKillPartialFill.message(), "Fill-or-Kill order rejected: insufficient liquidity for complete fill");
+    assert_eq!(OrderStatus::RejectedDuplicateId.message(), "Order rejected: duplicate order ID");
+}
+
+#[test]
+fn test_order_status_clone_and_equality() {
+    let status1 = OrderStatus::Accepted;
+    let status2 = status1.clone();
+
+    assert_eq!(status1, status2);
+
+    let status3 = OrderStatus::Executed;
+    assert_ne!(status1, status3);
+}
+
+#[test]
+fn test_order_status_debug_format() {
+    let status = OrderStatus::Accepted;
+    let debug_str = format!("{:?}", status);
+
+    assert!(debug_str.contains("Accepted"));
+}
+
+#[test]
+fn test_order_result_creation() {
+    let trades = vec![
+        Trade::new(
+            TradeInfo::new(1, 100, 10),
+            TradeInfo::new(2, 100, 10),
+        )
+    ];
+
+    let result = OrderResult::new(42, OrderStatus::Executed, trades.clone());
+
+    assert_eq!(result.order_id, 42);
+    assert_eq!(result.status, OrderStatus::Executed);
+    assert_eq!(result.trades.len(), 1);
+    assert_eq!(result.trades[0].bid_info.order_id, 1);
+    assert_eq!(result.trades[0].ask_info.order_id, 2);
+}
+
+#[test]
+fn test_order_result_with_no_trades() {
+    let result = OrderResult::new(123, OrderStatus::Accepted, Vec::new());
+
+    assert_eq!(result.order_id, 123);
+    assert_eq!(result.status, OrderStatus::Accepted);
+    assert!(result.trades.is_empty());
+}
+
+#[test]
+fn test_order_result_clone_and_equality() {
+    let result1 = OrderResult::new(1, OrderStatus::Accepted, Vec::new());
+    let result2 = result1.clone();
+
+    assert_eq!(result1, result2);
+
+    let result3 = OrderResult::new(2, OrderStatus::Accepted, Vec::new());
+    assert_ne!(result1, result3);
+}
+
+#[test]
+fn test_order_result_debug_format() {
+    let result = OrderResult::new(42, OrderStatus::Executed, Vec::new());
+    let debug_str = format!("{:?}", result);
+
+    assert!(debug_str.contains("OrderResult"));
+    assert!(debug_str.contains("42"));
+    assert!(debug_str.contains("Executed"));
 }

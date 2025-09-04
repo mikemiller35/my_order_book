@@ -1,4 +1,4 @@
-use my_order_book::{OrderBook, OrderModify, Side, OrderType};
+use my_order_book::{OrderBook, OrderModify, Side, OrderType, OrderStatus};
 
 #[test]
 fn can_add_order_and_query_bbo() {
@@ -154,4 +154,118 @@ fn test_partial_fills() {
     let level_infos = ob.get_order_infos();
     assert_eq!(level_infos.asks[0].quantity, 12); // 20 - 8 = 12 remaining
     assert!(level_infos.bids.is_empty()); // Buy order should be fully filled
+}
+
+#[test]
+fn test_order_status_accepted() {
+    let mut ob = OrderBook::new();
+
+    // Non-crossing orders should be accepted
+    let result1 = ob.add_order_with_status(Side::Buy, OrderType::Limit, 100, 10);
+    assert_eq!(result1.status, OrderStatus::Accepted);
+    assert_eq!(result1.order_id, 0);
+    assert!(result1.trades.is_empty());
+
+    let result2 = ob.add_order_with_status(Side::Sell, OrderType::Limit, 105, 5);
+    assert_eq!(result2.status, OrderStatus::Accepted);
+    assert_eq!(result2.order_id, 1);
+    assert!(result2.trades.is_empty());
+}
+
+#[test]
+fn test_order_status_executed() {
+    let mut ob = OrderBook::new();
+
+    // Add a sell order first
+    let result1 = ob.add_order_with_status(Side::Sell, OrderType::Limit, 100, 10);
+    assert_eq!(result1.status, OrderStatus::Accepted);
+
+    // Add crossing buy order - should execute
+    let result2 = ob.add_order_with_status(Side::Buy, OrderType::Limit, 100, 5);
+    assert_eq!(result2.status, OrderStatus::Executed);
+    assert_eq!(result2.trades.len(), 1);
+    assert_eq!(result2.trades[0].bid_info.order_id, 1);
+    assert_eq!(result2.trades[0].ask_info.order_id, 0);
+}
+
+#[test]
+fn test_order_status_rejected_no_liquidity() {
+    let mut ob = OrderBook::new();
+
+    // Market buy with no asks should be rejected
+    let result = ob.add_order_with_status(Side::Buy, OrderType::Market, 0, 10);
+    assert_eq!(result.status, OrderStatus::RejectedNoLiquidity);
+    assert!(result.trades.is_empty());
+    assert_eq!(ob.size(), 0);
+
+    // Market sell with no bids should be rejected
+    let result2 = ob.add_order_with_status(Side::Sell, OrderType::Market, 0, 10);
+    assert_eq!(result2.status, OrderStatus::RejectedNoLiquidity);
+    assert!(result2.trades.is_empty());
+    assert_eq!(ob.size(), 0);
+}
+
+#[test]
+fn test_order_status_rejected_fill_and_kill_no_match() {
+    let mut ob = OrderBook::new();
+
+    // Add a sell order at 105
+    ob.add_order_with_status(Side::Sell, OrderType::Limit, 105, 10);
+
+    // Fill-and-Kill buy at 100 (below ask) should be rejected
+    let result = ob.add_order_with_status(Side::Buy, OrderType::FillAndKill, 100, 5);
+    assert_eq!(result.status, OrderStatus::RejectedFillAndKillNoMatch);
+    assert!(result.trades.is_empty());
+    assert_eq!(ob.size(), 1); // Only the original sell order remains
+}
+
+#[test]
+fn test_order_status_rejected_fill_or_kill_partial_fill() {
+    let mut ob = OrderBook::new();
+
+    // Add partial liquidity - only 5 shares available
+    ob.add_order_with_status(Side::Sell, OrderType::Limit, 100, 5);
+
+    // Fill-or-Kill for 10 shares (more than available) should be rejected
+    let result = ob.add_order_with_status(Side::Buy, OrderType::FillOrKill, 100, 10);
+    assert_eq!(result.status, OrderStatus::RejectedFillOrKillPartialFill);
+    assert!(result.trades.is_empty());
+    assert_eq!(ob.size(), 1); // Only the original sell order remains
+
+    // Fill-or-Kill for exact amount should work
+    let result2 = ob.add_order_with_status(Side::Buy, OrderType::FillOrKill, 100, 5);
+    assert_eq!(result2.status, OrderStatus::Executed);
+    assert_eq!(result2.trades.len(), 1);
+    assert_eq!(ob.size(), 0); // Both orders should be filled
+}
+
+#[test]
+fn test_order_status_messages() {
+    // Test that all status messages are meaningful
+    assert_eq!(OrderStatus::Accepted.message(), "Order accepted and placed in order book");
+    assert_eq!(OrderStatus::Executed.message(), "Order executed successfully");
+    assert_eq!(OrderStatus::RejectedNoLiquidity.message(), "Market order rejected: no liquidity available on opposite side");
+    assert_eq!(OrderStatus::RejectedFillAndKillNoMatch.message(), "Fill-and-Kill order rejected: no matching orders available");
+    assert_eq!(OrderStatus::RejectedFillOrKillPartialFill.message(), "Fill-or-Kill order rejected: insufficient liquidity for complete fill");
+    assert_eq!(OrderStatus::RejectedDuplicateId.message(), "Order rejected: duplicate order ID");
+}
+
+#[test]
+fn test_mixed_order_methods() {
+    let mut ob = OrderBook::new();
+
+    // Test that both old and new methods work together
+    let (old_id, old_trades) = ob.add_order(Side::Buy, OrderType::Limit, 100, 10);
+    let new_result = ob.add_order_with_status(Side::Sell, OrderType::Limit, 105, 5);
+
+    assert_eq!(old_id, 0);
+    assert!(old_trades.is_empty());
+    assert_eq!(new_result.order_id, 1);
+    assert_eq!(new_result.status, OrderStatus::Accepted);
+    assert!(new_result.trades.is_empty());
+
+    // Add crossing order with new method
+    let crossing_result = ob.add_order_with_status(Side::Buy, OrderType::Limit, 106, 3);
+    assert_eq!(crossing_result.status, OrderStatus::Executed);
+    assert_eq!(crossing_result.trades.len(), 1);
 }
