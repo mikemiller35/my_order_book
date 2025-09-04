@@ -64,3 +64,4 @@ impl Order {
     }
 }
 
+pub type Orders = Vec<Order>;

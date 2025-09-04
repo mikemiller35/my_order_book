@@ -1,10 +1,13 @@
 use std::collections::{BTreeMap, HashMap};
 use crate::{
-    order::Order,
+    order::{Order, Orders},
     order_modify::OrderModify,
     trade::{Trade, Trades,  TradeInfo},
     types::{LevelInfo, OrderId, OrderIds, OrderType, Price, Quantity, Side, OrderStatus, OrderResult},
 };
+
+type MatchedTrade = (OrderId, Price, OrderId, Price, Quantity, bool, bool);
+type MatchedTrades = Vec<MatchedTrade>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OrderbookLevelInfos {
@@ -42,8 +45,8 @@ enum LevelAction {
 
 #[derive(Debug, Default)]
 pub struct OrderBook {
-    pub bids: BTreeMap<Price, Vec<Order>>,
-    pub asks: BTreeMap<Price, Vec<Order>>,
+    pub bids: BTreeMap<Price, Orders>,
+    pub asks: BTreeMap<Price, Orders>,
     pub orders: HashMap<OrderId, Order>,
     data: HashMap<Price, LevelData>,
     next_order_id: OrderId,
@@ -55,7 +58,7 @@ impl OrderBook {
     }
 
     fn update_level_data(&mut self, price: Price, quantity: Quantity, action: LevelAction) {
-        let data = self.data.entry(price).or_insert_with(LevelData::new);
+        let data: &mut LevelData = self.data.entry(price).or_insert_with(LevelData::new);
 
         match action {
             LevelAction::Add => {
@@ -85,7 +88,7 @@ impl OrderBook {
     }
 
     fn on_order_matched(&mut self, price: Price, quantity: Quantity, is_fully_filled: bool) {
-        let action = if is_fully_filled {
+        let action: LevelAction = if is_fully_filled {
             LevelAction::Remove
         } else {
             LevelAction::Match
@@ -99,14 +102,14 @@ impl OrderBook {
                 if self.asks.is_empty() {
                     return false;
                 }
-                let best_ask = *self.asks.keys().next().unwrap();
+                let best_ask: Price = *self.asks.keys().next().unwrap();
                 price >= best_ask
             }
             Side::Sell => {
                 if self.bids.is_empty() {
                     return false;
                 }
-                let best_bid = *self.bids.keys().next_back().unwrap();
+                let best_bid: Price = *self.bids.keys().next_back().unwrap();
                 price <= best_bid
             }
         }
@@ -117,7 +120,7 @@ impl OrderBook {
             return false;
         }
 
-        let threshold = match side {
+        let threshold: Option<Price> = match side {
             Side::Buy => {
                 if let Some(ask_price) = self.asks.keys().next() {
                     Some(*ask_price)
@@ -136,7 +139,7 @@ impl OrderBook {
 
         for (level_price, level_data) in &self.data {
             if let Some(threshold_price) = threshold {
-                let skip_level = match side {
+                let skip_level: bool = match side {
                     Side::Buy => threshold_price > *level_price,
                     Side::Sell => threshold_price < *level_price,
                 };
@@ -145,7 +148,7 @@ impl OrderBook {
                 }
             }
 
-            let price_check = match side {
+            let price_check: bool = match side {
                 Side::Buy => *level_price > price,
                 Side::Sell => *level_price < price,
             };
@@ -164,7 +167,7 @@ impl OrderBook {
     }
 
     fn match_orders(&mut self) -> Trades {
-        let mut trades = Vec::new();
+        let mut trades: Trades = Vec::new();
 
         loop {
             if self.bids.is_empty() || self.asks.is_empty() {
@@ -181,28 +184,28 @@ impl OrderBook {
                 break;
             }
 
-            let mut matched_trades = Vec::new();
-            let mut bid_orders_to_remove = Vec::new();
-            let mut ask_orders_to_remove = Vec::new();
-            let mut bid_orders_to_update = Vec::new();
-            let mut ask_orders_to_update = Vec::new();
+            let mut matched_trades: MatchedTrades = Vec::new();
+            let mut bid_orders_to_remove: OrderIds = Vec::new();
+            let mut ask_orders_to_remove: OrderIds = Vec::new();
+            let mut bid_orders_to_update: Orders = Vec::new();
+            let mut ask_orders_to_update: Orders = Vec::new();
 
             // Process matching within this price level
             {
-                let bid_orders = self.bids.get_mut(&bid_price).unwrap();
-                let ask_orders = self.asks.get_mut(&ask_price).unwrap();
+                let bid_orders: &mut Orders = self.bids.get_mut(&bid_price).unwrap();
+                let ask_orders: &mut Orders = self.asks.get_mut(&ask_price).unwrap();
 
                 while !bid_orders.is_empty() && !ask_orders.is_empty() {
-                    let mut bid = bid_orders[0].clone();
-                    let mut ask = ask_orders[0].clone();
+                    let mut bid: Order = bid_orders[0].clone();
+                    let mut ask: Order = ask_orders[0].clone();
 
-                    let quantity = std::cmp::min(bid.get_remaining_quantity(), ask.get_remaining_quantity());
+                    let quantity: Quantity = std::cmp::min(bid.get_remaining_quantity(), ask.get_remaining_quantity());
 
                     bid.fill(quantity);
                     ask.fill(quantity);
 
-                    let bid_filled = bid.is_filled();
-                    let ask_filled = ask.is_filled();
+                    let bid_filled: bool = bid.is_filled();
+                    let ask_filled: bool = ask.is_filled();
 
                     matched_trades.push((bid.get_order_id(), bid.get_price(), ask.get_order_id(), ask.get_price(), quantity, bid_filled, ask_filled));
 
@@ -247,21 +250,21 @@ impl OrderBook {
                 self.on_order_matched(ask_price, quantity, ask_filled);
             }
 
-            if self.bids.get(&bid_price).map_or(true, |orders| orders.is_empty()) {
+            if self.bids.get(&bid_price).map_or(true, |orders: &Orders| orders.is_empty()) {
                 self.bids.remove(&bid_price);
                 self.data.remove(&bid_price);
             }
 
-            if self.asks.get(&ask_price).map_or(true, |orders| orders.is_empty()) {
+            if self.asks.get(&ask_price).map_or(true, |orders:&Orders| orders.is_empty()) {
                 self.asks.remove(&ask_price);
                 self.data.remove(&ask_price);
             }
         }
 
-        let mut orders_to_cancel = Vec::new();
+        let mut orders_to_cancel: OrderIds = Vec::new();
 
         if !self.bids.is_empty() {
-            let best_bid_price = *self.bids.keys().next_back().unwrap();
+            let best_bid_price: Price = *self.bids.keys().next_back().unwrap();
             if let Some(bid_orders) = self.bids.get(&best_bid_price) {
                 if let Some(order) = bid_orders.first() {
                     if order.get_order_type() == OrderType::FillAndKill {
@@ -272,7 +275,7 @@ impl OrderBook {
         }
 
         if !self.asks.is_empty() {
-            let best_ask_price = *self.asks.keys().next().unwrap();
+            let best_ask_price: Price = *self.asks.keys().next().unwrap();
             if let Some(ask_orders) = self.asks.get(&best_ask_price) {
                 if let Some(order) = ask_orders.first() {
                     if order.get_order_type() == OrderType::FillAndKill {
@@ -290,10 +293,10 @@ impl OrderBook {
     }
 
     pub fn add_order(&mut self, side: Side, order_type: OrderType, price: Price, quantity: Quantity) -> (OrderId, Trades) {
-        let order_id = self.next_order_id;
+        let order_id: OrderId = self.next_order_id;
         self.next_order_id += 1;
 
-        let mut order = Order::new(order_id, side, order_type, price, quantity);
+        let mut order: Order = Order::new(order_id, side, order_type, price, quantity);
 
         if self.orders.contains_key(&order_id) {
             return (order_id, Vec::new());
@@ -303,7 +306,7 @@ impl OrderBook {
             match side {
                 Side::Buy => {
                     if !self.asks.is_empty() {
-                        let worst_ask = *self.asks.keys().next_back().unwrap();
+                        let worst_ask: Price = *self.asks.keys().next_back().unwrap();
                         order.to_good_till_cancel(worst_ask);
                     } else {
                         return (order_id, Vec::new());
@@ -311,7 +314,7 @@ impl OrderBook {
                 }
                 Side::Sell => {
                     if !self.bids.is_empty() {
-                        let worst_bid = *self.bids.keys().next().unwrap();
+                        let worst_bid: Price = *self.bids.keys().next().unwrap();
                         order.to_good_till_cancel(worst_bid);
                     } else {
                         return (order_id, Vec::new());
@@ -340,7 +343,7 @@ impl OrderBook {
         self.orders.insert(order_id, order.clone());
         self.on_order_added(&order);
 
-        let trades = self.match_orders();
+        let trades: Trades = self.match_orders();
         (order_id, trades)
     }
 
@@ -348,7 +351,7 @@ impl OrderBook {
         let order_id = self.next_order_id;
         self.next_order_id += 1;
 
-        let mut order = Order::new(order_id, side, order_type, price, quantity);
+        let mut order: Order = Order::new(order_id, side, order_type, price, quantity);
 
         if self.orders.contains_key(&order_id) {
             return OrderResult::new(order_id, OrderStatus::RejectedDuplicateId, Vec::new());
@@ -358,7 +361,7 @@ impl OrderBook {
             match side {
                 Side::Buy => {
                     if !self.asks.is_empty() {
-                        let worst_ask = *self.asks.keys().next_back().unwrap();
+                        let worst_ask: Price = *self.asks.keys().next_back().unwrap();
                         order.to_good_till_cancel(worst_ask);
                     } else {
                         return OrderResult::new(order_id, OrderStatus::RejectedNoLiquidity, Vec::new());
@@ -366,7 +369,7 @@ impl OrderBook {
                 }
                 Side::Sell => {
                     if !self.bids.is_empty() {
-                        let worst_bid = *self.bids.keys().next().unwrap();
+                        let worst_bid: Price = *self.bids.keys().next().unwrap();
                         order.to_good_till_cancel(worst_bid);
                     } else {
                         return OrderResult::new(order_id, OrderStatus::RejectedNoLiquidity, Vec::new());
@@ -395,9 +398,9 @@ impl OrderBook {
         self.orders.insert(order_id, order.clone());
         self.on_order_added(&order);
 
-        let trades = self.match_orders();
+        let trades: Trades = self.match_orders();
 
-        let status = if trades.is_empty() {
+        let status: OrderStatus = if trades.is_empty() {
             OrderStatus::Accepted
         } else {
             OrderStatus::Executed
@@ -417,20 +420,20 @@ impl OrderBook {
             return;
         }
 
-        let order = self.orders.remove(&order_id).unwrap();
+        let order: Order = self.orders.remove(&order_id).unwrap();
         match order.side {
             Side::Buy => {
-                let price = order.price;
-                let orders = self.bids.get_mut(&price).unwrap();
-                orders.retain(|o| o.id != order_id);
+                let price: Price = order.price;
+                let orders: &mut Orders = self.bids.get_mut(&price).unwrap();
+                orders.retain(|o: &Order| o.id != order_id);
                 if orders.is_empty() {
                     self.bids.remove(&price);
                 }
             }
             Side::Sell => {
-                let price = order.price;
-                let orders = self.asks.get_mut(&price).unwrap();
-                orders.retain(|o| o.id != order_id);
+                let price: Price = order.price;
+                let orders: &mut Orders = self.asks.get_mut(&price).unwrap();
+                orders.retain(|o: &Order| o.id != order_id);
                 if orders.is_empty() {
                     self.asks.remove(&price);
                 }
@@ -445,7 +448,7 @@ impl OrderBook {
     }
 
     pub fn modify_order(&mut self, order_modify: OrderModify) -> Trades {
-        let order_type = {
+        let order_type: OrderType = {
             if let Some(existing_order) = self.orders.get(&order_modify.get_order_id()) {
                 existing_order.get_order_type()
             } else {
@@ -472,8 +475,8 @@ impl OrderBook {
         let mut ask_infos = Vec::new();
 
         for (price, orders) in self.bids.iter().rev() {
-            let total_quantity = orders.iter()
-                .map(|order| order.get_remaining_quantity())
+            let total_quantity: Quantity = orders.iter()
+                .map(|order: &Order| order.get_remaining_quantity())
                 .sum();
             bid_infos.push(LevelInfo {
                 price: *price,
@@ -482,8 +485,8 @@ impl OrderBook {
         }
 
         for (price, orders) in &self.asks {
-            let total_quantity = orders.iter()
-                .map(|order| order.get_remaining_quantity())
+            let total_quantity: u32 = orders.iter()
+                .map(|order: &Order| order.get_remaining_quantity())
                 .sum();
             ask_infos.push(LevelInfo {
                 price: *price,
