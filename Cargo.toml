@@ -1,0 +1,20 @@
+[package]
+name = "my_order_book"
+version = "0.1.0"
+edition = "2024"
+authors = ["Mike Miller <mike.miller@mikemiller.tech>"]
+description = "A order book implementation for trading systems"
+license = "MIT"
+repository = "https://github.com/yourusername/my_order_book"
+keywords = ["trading", "orderbook", "finance", "matching-engine"]
+categories = ["algorithms", "data-structures"]
+
+[lib]
+name = "my_order_book"
+path = "src/lib.rs"
+
+[[bin]]
+name = "my_order_book"
+path = "src/main.rs"
+
+[dependencies]
