@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+version: "3"
+
+tasks:
+  test:
+    cmds:
+      - cargo test --
+  test-cov:
+    cmds:
+      - cargo llvm-cov --cobertura --output-path coverage.xml
+  cov:
+    cmds:
+      - cargo llvm-cov
